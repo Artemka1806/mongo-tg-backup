@@ -1,10 +1,18 @@
-# Environment variables
+# Git
+.git
+.gitignore
+
+# Environment
 .env
+.env.example
+
+# Documentation
+README.md
+*.md
 
 # Backups
 backups/
 *.gz
-*.archive
 
 # Logs
 *.log
@@ -16,24 +24,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 venv/
 env/
-ENV/
 
 # Pyrogram sessions
 sessions/
@@ -45,11 +37,7 @@ sessions/
 .idea/
 *.swp
 *.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
 
 # Docker
-.docker/
+docker-compose.yml
+Dockerfile

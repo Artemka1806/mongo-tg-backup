@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  mongodb-backup:
+    build: .
+    container_name: mongodb-backup-service
+    restart: unless-stopped
+    environment:
+      - MONGODB_URI=${MONGODB_URI}
+      - BACKUP_DIR=/app/backups
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - BACKUP_INTERVAL_MINUTES=${BACKUP_INTERVAL_MINUTES:-5}
+      - KEEP_LOCAL_BACKUPS=${KEEP_LOCAL_BACKUPS:-10}
+      - SESSION_NAME=${SESSION_NAME:-mongodb_backup_userbot}
+    volumes:
+      - ./backups:/app/backups
+      - ./sessions:/app/sessions
+      - ./logs:/app/logs
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - backup-network
+    stdin_open: true
+    tty: true
+
+networks:
+  backup-network:
+    driver: bridge
