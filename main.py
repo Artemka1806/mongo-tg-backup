@@ -267,7 +267,10 @@ async def main():
         me = await app.get_me()
         logger.info(f"Авторизовано як: {me.first_name} (@{me.username if me.username else 'без username'})")
         logger.info(f"ID: {me.id}, Phone: {me.phone_number if me.phone_number else 'N/A'}")
-        
+
+        chat = await app.get_chat(TELEGRAM_CHAT_ID)
+        logger.info(f"Resolved chat id: {chat.id}, type: {type(chat).__name__}")
+
         await send_latest_backup_on_startup(app)
         
         job = functools.partial(create_backup, app)
