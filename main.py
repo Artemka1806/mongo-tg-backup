@@ -106,7 +106,7 @@ async def create_backup(app: Client):
             cmd,
             capture_output=True,
             text=True,
-            timeout=25 * 60 
+            timeout=60 * 60 
         )
         
         duration = (datetime.now() - start_time).total_seconds()
@@ -127,7 +127,7 @@ async def create_backup(app: Client):
         cleanup_old_backups()
         
     except subprocess.TimeoutExpired as e:
-        error_message = "Таймаут виконання mongodump (перевищено 25 хвилин)."
+        error_message = "Таймаут виконання mongodump (перевищено 60 хвилин)."
         logger.error(error_message)
         await send_failure_notification(app, error_message, str(e))
     except Exception as e:
