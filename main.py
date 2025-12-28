@@ -327,7 +327,7 @@ async def check_bots_status(app: Client):
                 "🚫 **Бот в бані або токен недійсний**\n\n"
                 f"**bot_username:** @{bot_username}\n"
                 f"**bot_number:** {bot_number}\n"
-                "@Artemka1806"
+                "@Artemka1806 @redditmarketing"
             )
             try:
                 await app.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
