@@ -5,6 +5,8 @@ import functools
 from datetime import datetime
 from pathlib import Path
 import logging
+import urllib.request
+import json
 from pyrogram import Client
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -27,6 +29,11 @@ MONGODB_URI = os.getenv('MONGODB_URI')
 BACKUP_DIR = os.getenv('BACKUP_DIR', './backups')
 TELEGRAM_API_ID = os.getenv('TELEGRAM_API_ID')
 TELEGRAM_API_HASH = os.getenv('TELEGRAM_API_HASH')
+CONTROL_API_URL = os.getenv(
+    'CONTROL_API_URL',
+    'https://control-api.undresstool.fun/v1/bots/?page=1&page_size=100&show_tokens=true'
+)
+CONTROL_API_KEY = os.getenv('CONTROL_API_KEY')
 
 try:
     TELEGRAM_CHAT_ID = int(os.getenv('TELEGRAM_CHAT_ID'))
@@ -35,6 +42,7 @@ except (ValueError, TypeError):
     sys.exit(1)
 
 BACKUP_INTERVAL_MINUTES = int(os.getenv('BACKUP_INTERVAL_MINUTES', '5'))
+BOT_CHECK_INTERVAL_MINUTES = int(os.getenv('BOT_CHECK_INTERVAL_MINUTES', '60'))
 KEEP_LOCAL_BACKUPS = int(os.getenv('KEEP_LOCAL_BACKUPS', '10'))
 SESSION_NAME = os.getenv('SESSION_NAME', 'mongodb_backup_userbot')
 
@@ -228,7 +236,77 @@ async def send_latest_backup_on_startup(app: Client):
                 text=f"🤖 **Бота перезапущено.**\n\n❌ Не вдалося відправити останній бекап.\nПомилка: {str(e)}"
             )
         except Exception as send_e:
-            logger.error(f"Не вдалося навіть відправити повідомлення про помилку: {send_e}")
+        logger.error(f"Не вдалося навіть відправити повідомлення про помилку: {send_e}")
+
+
+def fetch_json(url: str, headers: dict, timeout: int = 10):
+    """Синхронний HTTP GET, повертає (status_code, json_obj)."""
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        status = response.getcode()
+        data = response.read()
+    return status, json.loads(data)
+
+
+async def check_bots_status(app: Client):
+    """Перевіряє доступність ботів та повідомляє про 401."""
+    if not CONTROL_API_KEY:
+        logger.warning("CONTROL_API_KEY не заданий. Пропускаємо перевірку ботів.")
+        return
+
+    try:
+        status, payload = await asyncio.to_thread(
+            fetch_json,
+            CONTROL_API_URL,
+            {"accept": "application/json", "X-API-Key": CONTROL_API_KEY},
+            15
+        )
+    except Exception as e:
+        logger.error(f"Помилка при отриманні списку ботів: {e}")
+        return
+
+    if status != 200:
+        logger.error(f"Невдалий статус при отриманні ботів: {status}")
+        return
+
+    items = payload.get("items", [])
+    if not items:
+        logger.info("Список ботів порожній.")
+        return
+
+    for item in items:
+        token = item.get("bot_token")
+        if not token:
+            continue
+
+        bot_username = item.get("bot_username", "unknown")
+        bot_number = item.get("bot_number", "unknown")
+
+        try:
+            status, _ = await asyncio.to_thread(
+                fetch_json,
+                f"https://api.telegram.org/bot{token}/getMe",
+                {"accept": "application/json"},
+                10
+            )
+        except Exception as e:
+            logger.error(f"Помилка при getMe для {bot_username}: {e}")
+            continue
+
+        if status == 200:
+            continue
+        if status == 401:
+            message = (
+                "🚫 **Бот в бані або токен недійсний**\n\n"
+                f"**bot_username:** {bot_username}\n"
+                f"**bot_number:** {bot_number}"
+            )
+            try:
+                await app.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+            except Exception as e:
+                logger.error(f"Не вдалося відправити повідомлення про бан: {e}")
+        else:
+            logger.warning(f"Неочікуваний статус getMe для {bot_username}: {status}")
 
 
 async def main():
@@ -279,6 +357,16 @@ async def main():
             trigger=IntervalTrigger(minutes=BACKUP_INTERVAL_MINUTES),
             id='backup_job',
             name='MongoDB Backup Job',
+            replace_existing=True,
+            max_instances=1
+        )
+
+        bot_check_job = functools.partial(check_bots_status, app)
+        scheduler.add_job(
+            bot_check_job,
+            trigger=IntervalTrigger(minutes=BOT_CHECK_INTERVAL_MINUTES),
+            id='bot_check_job',
+            name='Bot Availability Check Job',
             replace_existing=True,
             max_instances=1
         )
