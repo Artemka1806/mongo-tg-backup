@@ -8,6 +8,7 @@ import logging
 import urllib.request
 import json
 from pyrogram import Client
+from pyrogram.errors import FloodWait
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import signal
@@ -161,7 +162,8 @@ async def send_to_telegram(app: Client, file_path, filename, file_size_mb, durat
             f"✅ Статус: Успішно"
         )
         
-        await app.send_document(
+        await send_document_with_flood_wait(
+            app=app,
             chat_id=TELEGRAM_CHAT_ID,
             document=file_path,
             caption=caption,
@@ -172,6 +174,17 @@ async def send_to_telegram(app: Client, file_path, filename, file_size_mb, durat
         
     except Exception as e:
         logger.error(f"Помилка при відправці в Telegram: {str(e)}", exc_info=True)
+
+
+async def send_document_with_flood_wait(app: Client, **kwargs):
+    """Надійна відправка документу з очікуванням FloodWait."""
+    while True:
+        try:
+            return await app.send_document(**kwargs)
+        except FloodWait as e:
+            wait_seconds = max(int(getattr(e, "value", 0)), 1)
+            logger.warning(f"FloodWait при відправці файлу, очікування {wait_seconds} сек...")
+            await asyncio.sleep(wait_seconds)
 
 def cleanup_old_backups():
     """Видаляє старі бекапи, залишаючи лише останні N"""
@@ -219,7 +232,8 @@ async def send_latest_backup_on_startup(app: Client):
 
         caption = f"🤖 **Бота перезапущено.**\n\n✅ Останній доступний бекап: `{filename}`"
         
-        await app.send_document(
+        await send_document_with_flood_wait(
+            app=app,
             chat_id=TELEGRAM_CHAT_ID,
             document=str(latest_backup),
             caption=caption,
