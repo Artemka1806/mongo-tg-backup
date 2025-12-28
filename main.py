@@ -13,6 +13,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import signal
 import sys
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Налаштування логування
 logging.basicConfig(
