@@ -363,7 +363,7 @@ async def main():
         chat = await app.get_chat(TELEGRAM_CHAT_ID)
         logger.info(f"Resolved chat id: {chat.id}, type: {type(chat).__name__}")
 
-        await send_latest_backup_on_startup(app)
+        # await send_latest_backup_on_startup(app)
         
         job = functools.partial(create_backup, app)
         scheduler.add_job(
