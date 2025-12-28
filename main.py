@@ -326,7 +326,7 @@ async def check_bots_status(app: Client):
             message = (
                 "🚫 **Бот в бані або токен недійсний**\n\n"
                 f"**bot_username:** @{bot_username}\n"
-                f"**bot_number:** {bot_number}"
+                f"**bot_number:** {bot_number}\n"
                 "@Artemka1806"
             )
             try:
