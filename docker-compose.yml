@@ -14,6 +14,9 @@ services:
       - BACKUP_INTERVAL_MINUTES=${BACKUP_INTERVAL_MINUTES:-5}
       - KEEP_LOCAL_BACKUPS=${KEEP_LOCAL_BACKUPS:-10}
       - SESSION_NAME=${SESSION_NAME:-mongodb_backup_userbot}
+      - CONTROL_API_URL=${CONTROL_API_URL}
+      - CONTROL_API_KEY=${CONTROL_API_KEY}
+      - BOT_CHECK_INTERVAL_MINUTES=${BOT_CHECK_INTERVAL_MINUTES}
     volumes:
       - ./backups:/app/backups
       - ./sessions:/app/sessions
