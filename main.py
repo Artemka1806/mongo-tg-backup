@@ -44,6 +44,7 @@ except (ValueError, TypeError):
 
 BACKUP_INTERVAL_MINUTES = int(os.getenv('BACKUP_INTERVAL_MINUTES', '5'))
 BOT_CHECK_INTERVAL_MINUTES = int(os.getenv('BOT_CHECK_INTERVAL_MINUTES', '60'))
+BOT_CHECK_START_DELAY_SECONDS = int(os.getenv('BOT_CHECK_START_DELAY_SECONDS', '10'))
 KEEP_LOCAL_BACKUPS = int(os.getenv('KEEP_LOCAL_BACKUPS', '10'))
 SESSION_NAME = os.getenv('SESSION_NAME', 'mongodb_backup_userbot')
 
@@ -265,10 +266,14 @@ def fetch_json(url: str, headers: dict, timeout: int = 10):
 async def check_bots_status(app: Client):
     """Перевіряє доступність ботів та повідомляє про 401."""
     if not CONTROL_API_KEY:
-        logger.warning("CONTROL_API_KEY не заданий. Пропускаємо перевірку ботів.")
+        logger.warning(
+            "CONTROL_API_KEY не заданий. Додайте його в .env (CONTROL_API_KEY=...). "
+            "Перевірку ботів пропущено."
+        )
         return
 
     try:
+        logger.info("Запуск перевірки ботів...")
         status, payload = await asyncio.to_thread(
             fetch_json,
             CONTROL_API_URL,
@@ -387,6 +392,19 @@ async def main():
         
         scheduler.start()
         logger.info("Scheduler запущено")
+
+        logger.info(
+            "Перевірка ботів запланована кожні %s хвилин",
+            BOT_CHECK_INTERVAL_MINUTES
+        )
+
+        if BOT_CHECK_START_DELAY_SECONDS > 0:
+            logger.info(
+                "Перший запуск перевірки ботів через %s сек",
+                BOT_CHECK_START_DELAY_SECONDS
+            )
+            await asyncio.sleep(BOT_CHECK_START_DELAY_SECONDS)
+        await check_bots_status(app)
         
         while True:
             await asyncio.sleep(3600)
