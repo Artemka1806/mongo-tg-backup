@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 import logging
 import urllib.request
+import urllib.error
 import json
 from pyrogram import Client
 from pyrogram.errors import FloodWait
@@ -260,10 +261,14 @@ async def send_latest_backup_on_startup(app: Client):
 def fetch_json(url: str, headers: dict, timeout: int = 10):
     """Синхронний HTTP GET, повертає (status_code, json_obj)."""
     req = urllib.request.Request(url, headers=headers, method="GET")
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        status = response.getcode()
-        data = response.read()
-    return status, json.loads(data)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            status = response.getcode()
+            data = response.read()
+    except urllib.error.HTTPError as e:
+        status = e.code
+        data = e.read()
+    return status, json.loads(data) if data else {}
 
 
 async def check_bots_status(app: Client):
