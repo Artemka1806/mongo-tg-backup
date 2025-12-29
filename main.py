@@ -8,6 +8,7 @@ import logging
 import urllib.request
 import urllib.error
 import json
+import difflib
 from pyrogram import Client
 from pyrogram.errors import FloodWait
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -49,14 +50,20 @@ except (ValueError, TypeError):
 BACKUP_INTERVAL_MINUTES = int(os.getenv('BACKUP_INTERVAL_MINUTES', '5'))
 BOT_CHECK_INTERVAL_MINUTES = int(os.getenv('BOT_CHECK_INTERVAL_MINUTES', '60'))
 BOT_CHECK_START_DELAY_SECONDS = int(os.getenv('BOT_CHECK_START_DELAY_SECONDS', '10'))
+POSE_CHECK_INTERVAL_MINUTES = int(os.getenv('POSE_CHECK_INTERVAL_MINUTES', '3'))
+POSE_CHECK_START_DELAY_SECONDS = int(os.getenv('POSE_CHECK_START_DELAY_SECONDS', '10'))
 KEEP_LOCAL_BACKUPS = int(os.getenv('KEEP_LOCAL_BACKUPS', '10'))
 SESSION_NAME = os.getenv('SESSION_NAME', 'mongodb_backup_userbot')
+POSE_DATA_DIR = os.getenv('POSE_DATA_DIR', './pose_data')
+POSE_API_BASE_URL = os.getenv('POSE_API_BASE_URL', 'http://84.247.168.144:8001')
+POSE_API_TOKEN = os.getenv('POSE_API_TOKEN')
 
 # Прапорець для запобігання паралельного виконання
 backup_in_progress = False
 
 # Створення директорії для бекапів
 Path(BACKUP_DIR).mkdir(parents=True, exist_ok=True)
+Path(POSE_DATA_DIR).mkdir(parents=True, exist_ok=True)
 
 # Змінна для відстеження прогресу відправки
 last_reported_progress = -1
@@ -337,6 +344,80 @@ async def check_bots_status(app: Client):
             logger.warning(f"Неочікуваний статус getMe для {bot_username}: {status}")
 
 
+def normalize_json(data) -> str:
+    """Стабільний текстовий формат JSON для порівняння."""
+    return json.dumps(data, ensure_ascii=False, sort_keys=True, indent=2)
+
+
+def load_text_if_exists(path: Path) -> str:
+    if path.exists():
+        return path.read_text(encoding="utf-8")
+    return ""
+
+
+async def check_pose_endpoints(app: Client):
+    """Перевіряє зміни у pose endpoints та повідомляє в чат."""
+    if not POSE_API_TOKEN:
+        logger.warning(
+            "POSE_API_TOKEN не заданий. Додайте його в .env (POSE_API_TOKEN=...). "
+            "Перевірку поз пропущено."
+        )
+        return
+
+    headers = {"accept": "application/json", "access-token": POSE_API_TOKEN}
+    endpoints = {
+        "video_all_poses": f"{POSE_API_BASE_URL}/video/all_poses",
+        "pose_poses": f"{POSE_API_BASE_URL}/pose/poses",
+    }
+
+    for name, url in endpoints.items():
+        try:
+            status, payload = await asyncio.to_thread(fetch_json, url, headers, 15)
+        except Exception as e:
+            logger.error(f"Помилка при запиті {name}: {e}")
+            continue
+
+        if status != 200:
+            logger.error(f"Невдалий статус {status} для {name}")
+            continue
+
+        normalized = normalize_json(payload)
+        data_path = Path(POSE_DATA_DIR) / f"{name}.json"
+        previous = load_text_if_exists(data_path)
+
+        if not previous:
+            data_path.write_text(normalized, encoding="utf-8")
+            logger.info(f"Збережено початковий стан для {name}")
+            continue
+
+        if previous == normalized:
+            continue
+
+        diff_lines = difflib.unified_diff(
+            previous.splitlines(),
+            normalized.splitlines(),
+            fromfile=f"{name}_prev",
+            tofile=f"{name}_new",
+            lineterm=""
+        )
+        diff_text = "\n".join(diff_lines)
+        data_path.write_text(normalized, encoding="utf-8")
+
+        header = f"🔄 **Зміни в {name}**\n@Artemka1806 @redditmarketing"
+        if len(diff_text) > 3500:
+            diff_file = Path(POSE_DATA_DIR) / f"{name}_diff_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            diff_file.write_text(diff_text, encoding="utf-8")
+            await send_document_with_flood_wait(
+                app=app,
+                chat_id=TELEGRAM_CHAT_ID,
+                document=str(diff_file),
+                caption=header
+            )
+        else:
+            message = f"{header}\n\n```\n{diff_text}\n```"
+            await app.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+
+
 async def main():
     """Головна функція"""
     logger.info("=" * 50)
@@ -398,7 +479,17 @@ async def main():
             replace_existing=True,
             max_instances=1
         )
-        
+
+        pose_check_job = functools.partial(check_pose_endpoints, app)
+        scheduler.add_job(
+            pose_check_job,
+            trigger=IntervalTrigger(minutes=POSE_CHECK_INTERVAL_MINUTES),
+            id='pose_check_job',
+            name='Pose Endpoints Check Job',
+            replace_existing=True,
+            max_instances=1
+        )
+
         scheduler.start()
         logger.info("Scheduler запущено")
 
@@ -414,6 +505,19 @@ async def main():
             )
             await asyncio.sleep(BOT_CHECK_START_DELAY_SECONDS)
         await check_bots_status(app)
+
+        logger.info(
+            "Перевірка pose endpoints запланована кожні %s хвилин",
+            POSE_CHECK_INTERVAL_MINUTES
+        )
+
+        if POSE_CHECK_START_DELAY_SECONDS > 0:
+            logger.info(
+                "Перший запуск перевірки pose endpoints через %s сек",
+                POSE_CHECK_START_DELAY_SECONDS
+            )
+            await asyncio.sleep(POSE_CHECK_START_DELAY_SECONDS)
+        await check_pose_endpoints(app)
         
         while True:
             await asyncio.sleep(3600)

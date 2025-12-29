@@ -17,10 +17,17 @@ services:
       - CONTROL_API_URL=${CONTROL_API_URL}
       - CONTROL_API_KEY=${CONTROL_API_KEY}
       - BOT_CHECK_INTERVAL_MINUTES=${BOT_CHECK_INTERVAL_MINUTES}
+      - POSE_API_BASE_URL=${POSE_API_BASE_URL}
+      - POSE_API_TOKEN=${POSE_API_TOKEN}
+      - POSE_CHECK_INTERVAL_MINUTES=${POSE_CHECK_INTERVAL_MINUTES:-3}
+      - POSE_CHECK_START_DELAY_SECONDS=${POSE_CHECK_START_DELAY_SECONDS:-10}
+      - POSE_DATA_DIR=/app/pose_data
+      - POSE_NOTIFY_MENTIONS=${POSE_NOTIFY_MENTIONS}
     volumes:
       - ./backups:/app/backups
       - ./sessions:/app/sessions
       - ./logs:/app/logs
+      - ./pose_data:/app/pose_data
       - /etc/localtime:/etc/localtime:ro
     networks:
       - backup-network
