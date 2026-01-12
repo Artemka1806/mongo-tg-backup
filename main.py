@@ -39,6 +39,10 @@ CONTROL_API_URL = os.getenv(
     'CONTROL_API_URL',
     'https://control-api.undresstool.fun/v1/bots/?page=1&page_size=100&show_tokens=true'
 )
+CONTROL_API_CONTAINERS_URL = os.getenv(
+    'CONTROL_API_CONTAINERS_URL',
+    'https://control-api.undresstool.fun/v1/system/containers/small'
+)
 CONTROL_API_KEY = os.getenv('CONTROL_API_KEY')
 
 try:
@@ -288,6 +292,35 @@ async def check_bots_status(app: Client):
         return
 
     try:
+        containers_status, containers_payload = await asyncio.to_thread(
+            fetch_json,
+            CONTROL_API_CONTAINERS_URL,
+            {"accept": "application/json", "X-API-Key": CONTROL_API_KEY},
+            15
+        )
+    except Exception as e:
+        logger.error(f"Помилка при отриманні контейнерів: {e}")
+        return
+
+    if containers_status != 200:
+        logger.error(f"Невдалий статус при отриманні контейнерів: {containers_status}")
+        return
+
+    containers_items = containers_payload.get("items", containers_payload)
+    if not isinstance(containers_items, list):
+        logger.error("Неочікуваний формат відповіді контейнерів")
+        return
+
+    container_names = set()
+    for item in containers_items:
+        if isinstance(item, dict):
+            name = item.get("name") or item.get("container_name")
+            if name:
+                container_names.add(name)
+        elif isinstance(item, str):
+            container_names.add(item)
+
+    try:
         logger.info("Запуск перевірки ботів...")
         status, payload = await asyncio.to_thread(
             fetch_json,
@@ -315,6 +348,9 @@ async def check_bots_status(app: Client):
 
         bot_username = item.get("bot_username", "unknown")
         bot_number = item.get("bot_number", "unknown")
+        container_name = f"bot{bot_number}"
+        if container_name not in container_names:
+            continue
 
         try:
             status, _ = await asyncio.to_thread(
