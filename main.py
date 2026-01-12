@@ -306,7 +306,10 @@ async def check_bots_status(app: Client):
         logger.error(f"Невдалий статус при отриманні контейнерів: {containers_status}")
         return
 
-    containers_items = containers_payload.get("items", containers_payload)
+    if isinstance(containers_payload, dict):
+        containers_items = containers_payload.get("items", containers_payload)
+    else:
+        containers_items = containers_payload
     if not isinstance(containers_items, list):
         logger.error("Неочікуваний формат відповіді контейнерів")
         return
