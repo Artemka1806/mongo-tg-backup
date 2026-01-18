@@ -356,19 +356,17 @@ async def check_bots_status(app: Client):
             continue
 
         try:
-            status, _ = await asyncio.to_thread(
+            status, payload = await asyncio.to_thread(
                 fetch_json,
-                f"https://api.telegram.org/bot{token}/getMe",
+                f"https://api.telegram.org/bot{token}/getMyName",
                 {"accept": "application/json"},
                 10
             )
         except Exception as e:
-            logger.error(f"Помилка при getMe для {bot_username}: {e}")
+            logger.error(f"Помилка при getMyName для {bot_username}: {e}")
             continue
 
-        if status == 200:
-            continue
-        if status == 401:
+        if status == 401 or payload.get("ok") is False:
             message = (
                 "🚫 **Бот в бані або токен недійсний**\n\n"
                 f"**bot_username:** @{bot_username}\n"
@@ -379,8 +377,8 @@ async def check_bots_status(app: Client):
                 await app.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
             except Exception as e:
                 logger.error(f"Не вдалося відправити повідомлення про бан: {e}")
-        else:
-            logger.warning(f"Неочікуваний статус getMe для {bot_username}: {status}")
+        elif status != 200:
+            logger.warning(f"Неочікуваний статус getMyName для {bot_username}: {status}")
 
 
 def normalize_json(data) -> str:
