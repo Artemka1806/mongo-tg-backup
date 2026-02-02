@@ -302,6 +302,12 @@ async def check_bots_status(app: Client):
         logger.error(f"Помилка при отриманні контейнерів: {e}")
         return
 
+    logger.info(
+        "Відповідь containers endpoint: status=%s, body=%s",
+        containers_status,
+        normalize_json(containers_payload) if isinstance(containers_payload, (dict, list)) else containers_payload,
+    )
+
     if containers_status != 200:
         logger.error(f"Невдалий статус при отриманні контейнерів: {containers_status}")
         return
@@ -335,6 +341,12 @@ async def check_bots_status(app: Client):
         logger.error(f"Помилка при отриманні списку ботів: {e}")
         return
 
+    logger.info(
+        "Відповідь bots endpoint: status=%s, body=%s",
+        status,
+        normalize_json(payload) if isinstance(payload, (dict, list)) else payload,
+    )
+
     if status != 200:
         logger.error(f"Невдалий статус при отриманні ботів: {status}")
         return
@@ -344,7 +356,13 @@ async def check_bots_status(app: Client):
         logger.info("Список ботів порожній.")
         return
 
+    checked_total = 0
+    checked_with_container = 0
+    checked_with_token = 0
+    checked_api_calls = 0
+
     for item in items:
+        checked_total += 1
         token = item.get("bot_token")
         if not token:
             continue
@@ -354,6 +372,9 @@ async def check_bots_status(app: Client):
         container_name = f"bot{bot_number}"
         if container_name not in container_names:
             continue
+
+        checked_with_token += 1
+        checked_with_container += 1
 
         try:
             status, payload = await asyncio.to_thread(
@@ -365,6 +386,14 @@ async def check_bots_status(app: Client):
         except Exception as e:
             logger.error(f"Помилка при getMyName для {bot_username}: {e}")
             continue
+
+        checked_api_calls += 1
+        logger.info(
+            "Відповідь getMyName для %s: status=%s, body=%s",
+            bot_username,
+            status,
+            normalize_json(payload) if isinstance(payload, (dict, list)) else payload,
+        )
 
         if status == 401 or payload.get("ok") is False:
             message = (
@@ -379,6 +408,14 @@ async def check_bots_status(app: Client):
                 logger.error(f"Не вдалося відправити повідомлення про бан: {e}")
         elif status != 200:
             logger.warning(f"Неочікуваний статус getMyName для {bot_username}: {status}")
+
+    logger.info(
+        "Підсумок перевірки ботів: всього=%s, з токеном=%s, в контейнері=%s, викликів getMyName=%s",
+        checked_total,
+        checked_with_token,
+        checked_with_container,
+        checked_api_calls,
+    )
 
 
 def normalize_json(data) -> str:
@@ -413,6 +450,13 @@ async def check_pose_endpoints(app: Client):
         except Exception as e:
             logger.error(f"Помилка при запиті {name}: {e}")
             continue
+
+        logger.info(
+            "Відповідь %s endpoint: status=%s, body=%s",
+            name,
+            status,
+            normalize_json(payload) if isinstance(payload, (dict, list)) else payload,
+        )
 
         if status != 200:
             logger.error(f"Невдалий статус {status} для {name}")
