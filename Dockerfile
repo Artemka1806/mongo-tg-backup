@@ -5,19 +5,15 @@ ENV TZ=Etc/UTC
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         wget \
-        gnupg \
         ca-certificates \
         tzdata && \
     ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
     echo $TZ > /etc/timezone && \
-    wget -qO - https://pgp.mongodb.com/server-7.0.asc | \
-        gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg && \
-    echo "deb [ arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg ] https://repo.mongodb.org/apt/debian bullseye/mongodb-org/7.0 main" \
-        > /etc/apt/sources.list.d/mongodb-org-7.0.list && \
-    apt-get update && \
-    apt-get install -y mongodb-database-tools && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    wget -q https://fastdl.mongodb.org/tools/db/mongodb-database-tools-debian12-x86_64-100.9.4.tgz && \
+    tar -xzf mongodb-database-tools-debian12-x86_64-100.9.4.tgz && \
+    mv mongodb-database-tools-*/bin/* /usr/local/bin/ && \
+    rm -rf mongodb-database-tools* && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
