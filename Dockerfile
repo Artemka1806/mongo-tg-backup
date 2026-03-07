@@ -1,36 +1,34 @@
 FROM python:3.11-slim
 
-# Set the timezone to UTC
+# timezone
 ENV TZ=Etc/UTC
 
-# Встановлення mongodb-database-tools та tzdata
+# install dependencies
 RUN apt-get update && \
-    apt-get install -y wget gnupg tzdata && \
-    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
-    wget -qO - https://www.mongodb.org/static/pgp/server-7.0.asc | gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] http://repo.mongodb.org/apt/debian bookworm/mongodb-org/7.0 main" | tee /etc/apt/sources.list.d/mongodb-org-7.0.list && \
-    apt-get update && \
-    apt-get install -y mongodb-database-tools && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+        tzdata \
+        mongodb-database-tools \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
-# Створення робочої директорії
+# working directory
 WORKDIR /app
 
-# Копіювання файлів
+# install python dependencies first (better docker cache)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# copy project files
 COPY main.py .
 COPY login.py .
 
-# Створення директорії для бекапів
-RUN mkdir -p /app/backups
+# create directories
+RUN mkdir -p /app/backups /app/sessions
 
-# Створення директорії для session файлів Pyrogram
-RUN mkdir -p /app/sessions
-
+# volumes
 VOLUME ["/app/backups", "/app/sessions"]
 
-# Запуск додатку
+# run app
 CMD ["python", "-u", "main.py"]
