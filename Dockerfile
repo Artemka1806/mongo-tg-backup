@@ -7,7 +7,7 @@ RUN apt-get update && \
         wget \
         ca-certificates \
         tzdata \
-        libkrb5-3 \
+        libgssapi-krb5-2 \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
     && wget -q https://fastdl.mongodb.org/tools/db/mongodb-database-tools-debian12-x86_64-100.9.4.tgz \
