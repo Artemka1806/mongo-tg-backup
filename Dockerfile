@@ -6,14 +6,16 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         wget \
         ca-certificates \
-        tzdata && \
-    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
-    echo $TZ > /etc/timezone && \
-    wget -q https://fastdl.mongodb.org/tools/db/mongodb-database-tools-debian12-x86_64-100.9.4.tgz && \
-    tar -xzf mongodb-database-tools-debian12-x86_64-100.9.4.tgz && \
-    mv mongodb-database-tools-*/bin/* /usr/local/bin/ && \
-    rm -rf mongodb-database-tools* && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+        tzdata \
+        libkrb5-3 \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
+    && wget -q https://fastdl.mongodb.org/tools/db/mongodb-database-tools-debian12-x86_64-100.9.4.tgz \
+    && tar -xzf mongodb-database-tools-debian12-x86_64-100.9.4.tgz \
+    && mv mongodb-database-tools-*/bin/* /usr/local/bin/ \
+    && rm -rf mongodb-database-tools* \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
