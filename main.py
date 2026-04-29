@@ -9,7 +9,8 @@ import urllib.request
 import urllib.error
 import json
 import difflib
-from pyrogram import Client
+import redis.asyncio as redis
+from pyrogram import Client, raw
 from pyrogram.errors import FloodWait
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
@@ -61,6 +62,8 @@ SESSION_NAME = os.getenv('SESSION_NAME', 'mongodb_backup_userbot')
 POSE_DATA_DIR = os.getenv('POSE_DATA_DIR', './pose_data')
 POSE_API_BASE_URL = os.getenv('POSE_API_BASE_URL', 'http://84.247.168.144:8001')
 POSE_API_TOKEN = os.getenv('POSE_API_TOKEN')
+REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
+BOT_ALERT_REDIS_PREFIX = os.getenv('BOT_ALERT_REDIS_PREFIX', 'bot_alerted')
 
 # Прапорець для запобігання паралельного виконання
 backup_in_progress = False
@@ -71,6 +74,8 @@ Path(POSE_DATA_DIR).mkdir(parents=True, exist_ok=True)
 
 # Змінна для відстеження прогресу відправки
 last_reported_progress = -1
+redis_client = None
+redis_error_logged = False
 
 def progress_callback(current, total):
     """Callback-функція для відображення прогресу відправки."""
@@ -282,8 +287,137 @@ def fetch_json(url: str, headers: dict, timeout: int = 10):
     return status, json.loads(data) if data else {}
 
 
+def clean_bot_username(username: str) -> str:
+    """Нормалізує username для resolveUsername."""
+    return str(username or "").strip().lstrip("@")
+
+
+async def get_redis_client():
+    """Повертає Redis client або None, якщо Redis недоступний."""
+    global redis_client, redis_error_logged
+
+    if not REDIS_URL:
+        return None
+
+    if redis_client is None:
+        redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+
+    try:
+        await redis_client.ping()
+        return redis_client
+    except Exception as e:
+        if not redis_error_logged:
+            logger.error(f"Redis недоступний, дедуп алертів ботів вимкнено: {e}")
+            redis_error_logged = True
+        return None
+
+
+def bot_alert_key(bot_tg_id) -> str:
+    return f"{BOT_ALERT_REDIS_PREFIX}:{bot_tg_id}"
+
+
+async def was_bot_alerted(bot_tg_id) -> bool:
+    """Перевіряє, чи вже писали про цього бота."""
+    if not bot_tg_id:
+        return False
+
+    client = await get_redis_client()
+    if client is None:
+        return False
+
+    try:
+        return bool(await client.exists(bot_alert_key(bot_tg_id)))
+    except Exception as e:
+        logger.error(f"Не вдалося перевірити Redis для bot_id={bot_tg_id}: {e}")
+        return False
+
+
+async def mark_bot_alerted(bot_tg_id, alert_payload: dict):
+    """Записує Telegram id бота в Redis після успішного алерта."""
+    if not bot_tg_id:
+        return
+
+    client = await get_redis_client()
+    if client is None:
+        return
+
+    try:
+        await client.set(
+            bot_alert_key(bot_tg_id),
+            json.dumps(alert_payload, ensure_ascii=False, sort_keys=True),
+        )
+    except Exception as e:
+        logger.error(f"Не вдалося записати Redis для bot_id={bot_tg_id}: {e}")
+
+
+async def send_bot_alert_once(app: Client, bot_tg_id, message: str, alert_payload: dict):
+    """Відправляє алерт один раз на Telegram id бота."""
+    if bot_tg_id and await was_bot_alerted(bot_tg_id):
+        logger.info(f"Алерт для bot_id={bot_tg_id} вже був відправлений, пропускаємо.")
+        return
+
+    await app.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+    await mark_bot_alerted(bot_tg_id, alert_payload)
+
+
+async def resolve_bot_via_userbot(app: Client, bot_username: str):
+    """Отримує raw Telegram user info через поточну userbot-сесію."""
+    username = clean_bot_username(bot_username)
+    if not username or username == "unknown":
+        return None
+
+    try:
+        resolved = await app.invoke(raw.functions.contacts.ResolveUsername(username=username))
+    except Exception as e:
+        logger.error(f"Помилка userbot resolveUsername для @{username}: {e}")
+        return None
+
+    users = getattr(resolved, "users", []) or []
+    if not users:
+        logger.warning(f"Userbot resolveUsername не повернув users для @{username}")
+        return None
+
+    user = next(
+        (
+            u for u in users
+            if clean_bot_username(getattr(u, "username", "")) == username
+        ),
+        users[0],
+    )
+    reasons = []
+    for reason in getattr(user, "restriction_reason", None) or []:
+        reasons.append({
+            "platform": getattr(reason, "platform", None),
+            "reason": getattr(reason, "reason", None),
+            "text": getattr(reason, "text", None),
+        })
+
+    return {
+        "id": getattr(user, "id", None),
+        "username": getattr(user, "username", username),
+        "bot": getattr(user, "bot", None),
+        "restricted": getattr(user, "restricted", None),
+        "restriction_reason": reasons,
+    }
+
+
+def format_restriction_reasons(reasons: list) -> str:
+    if not reasons:
+        return "немає деталей"
+
+    lines = []
+    for reason in reasons:
+        lines.append(
+            "- "
+            f"platform={reason.get('platform')}, "
+            f"reason={reason.get('reason')}, "
+            f"text={reason.get('text')}"
+        )
+    return "\n".join(lines)
+
+
 async def check_bots_status(app: Client):
-    """Перевіряє доступність ботів та повідомляє про 401."""
+    """Перевіряє доступність ботів, Bot API статус та userbot restrictions."""
     if not CONTROL_API_KEY:
         logger.warning(
             "CONTROL_API_KEY не заданий. Додайте його в .env (CONTROL_API_KEY=...). "
@@ -360,12 +494,10 @@ async def check_bots_status(app: Client):
     checked_with_container = 0
     checked_with_token = 0
     checked_api_calls = 0
+    checked_userbot_calls = 0
 
     for item in items:
         checked_total += 1
-        token = item.get("bot_token")
-        if not token:
-            continue
 
         bot_username = item.get("bot_username", "unknown")
         bot_number = item.get("bot_number", "unknown")
@@ -373,8 +505,52 @@ async def check_bots_status(app: Client):
         if container_name not in container_names:
             continue
 
-        checked_with_token += 1
         checked_with_container += 1
+
+        userbot_info = await resolve_bot_via_userbot(app, bot_username)
+        if userbot_info:
+            checked_userbot_calls += 1
+            logger.info(
+                "Userbot info для %s: %s",
+                bot_username,
+                normalize_json(userbot_info),
+            )
+
+            if userbot_info.get("restricted"):
+                bot_tg_id = userbot_info.get("id")
+                message = (
+                    "⚠️ **У бота є Telegram restriction**\n\n"
+                    f"**bot_username:** @{clean_bot_username(bot_username)}\n"
+                    f"**bot_number:** {bot_number}\n"
+                    f"**telegram_id:** `{bot_tg_id}`\n"
+                    f"**bot:** {userbot_info.get('bot')}\n\n"
+                    f"**restriction_reason:**\n```\n"
+                    f"{format_restriction_reasons(userbot_info.get('restriction_reason') or [])}\n"
+                    "```\n"
+                    # "@Artemka1806 @redditmarketing"
+                )
+                try:
+                    await send_bot_alert_once(
+                        app,
+                        bot_tg_id,
+                        message,
+                        {
+                            "type": "restriction",
+                            "bot_username": clean_bot_username(bot_username),
+                            "bot_number": bot_number,
+                            "telegram_id": bot_tg_id,
+                            "restriction_reason": userbot_info.get("restriction_reason") or [],
+                            "created_at": datetime.now().isoformat(),
+                        },
+                    )
+                except Exception as e:
+                    logger.error(f"Не вдалося відправити повідомлення про restriction: {e}")
+
+        token = item.get("bot_token")
+        if not token:
+            continue
+
+        checked_with_token += 1
 
         try:
             status, payload = await asyncio.to_thread(
@@ -396,25 +572,41 @@ async def check_bots_status(app: Client):
         )
 
         if status == 401 or payload.get("ok") is False:
+            bot_tg_id = userbot_info.get("id") if userbot_info else None
             message = (
                 "🚫 **Бот в бані або токен недійсний**\n\n"
-                f"**bot_username:** @{bot_username}\n"
+                f"**bot_username:** @{clean_bot_username(bot_username)}\n"
                 f"**bot_number:** {bot_number}\n"
+                f"**telegram_id:** `{bot_tg_id or 'unknown'}`\n"
                 "@Artemka1806 @redditmarketing"
             )
             try:
-                await app.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+                await send_bot_alert_once(
+                    app,
+                    bot_tg_id,
+                    message,
+                    {
+                        "type": "bot_api",
+                        "bot_username": clean_bot_username(bot_username),
+                        "bot_number": bot_number,
+                        "telegram_id": bot_tg_id,
+                        "status": status,
+                        "payload": payload,
+                        "created_at": datetime.now().isoformat(),
+                    },
+                )
             except Exception as e:
                 logger.error(f"Не вдалося відправити повідомлення про бан: {e}")
         elif status != 200:
             logger.warning(f"Неочікуваний статус getMyName для {bot_username}: {status}")
 
     logger.info(
-        "Підсумок перевірки ботів: всього=%s, з токеном=%s, в контейнері=%s, викликів getMyName=%s",
+        "Підсумок перевірки ботів: всього=%s, з токеном=%s, в контейнері=%s, викликів getMyName=%s, userbot resolve=%s",
         checked_total,
         checked_with_token,
         checked_with_container,
         checked_api_calls,
+        checked_userbot_calls,
     )
 
 
@@ -613,6 +805,9 @@ async def main():
         if app.is_initialized:
             await app.stop()
             logger.info("Telegram клієнт зупинено.")
+        if redis_client is not None:
+            await redis_client.aclose()
+            logger.info("Redis клієнт зупинено.")
         logger.info("Сервіс повністю зупинено.")
 
 

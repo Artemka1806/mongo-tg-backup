@@ -18,6 +18,8 @@ services:
       - CONTROL_API_CONTAINERS_URL=${CONTROL_API_CONTAINERS_URL}
       - CONTROL_API_KEY=${CONTROL_API_KEY}
       - BOT_CHECK_INTERVAL_MINUTES=${BOT_CHECK_INTERVAL_MINUTES}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - BOT_ALERT_REDIS_PREFIX=${BOT_ALERT_REDIS_PREFIX:-bot_alerted}
       - POSE_API_BASE_URL=${POSE_API_BASE_URL}
       - POSE_API_TOKEN=${POSE_API_TOKEN}
       - POSE_CHECK_INTERVAL_MINUTES=${POSE_CHECK_INTERVAL_MINUTES:-3}
@@ -32,9 +34,24 @@ services:
       - /etc/localtime:/etc/localtime:ro
     networks:
       - backup-network
+    depends_on:
+      - redis
     stdin_open: true
     tty: true
+
+  redis:
+    image: redis:7-alpine
+    container_name: mongodb-backup-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - backup-network
 
 networks:
   backup-network:
     driver: bridge
+
+volumes:
+  redis_data:
