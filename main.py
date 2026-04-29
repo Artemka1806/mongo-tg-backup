@@ -527,7 +527,7 @@ async def check_bots_status(app: Client):
                     f"**restriction_reason:**\n```\n"
                     f"{format_restriction_reasons(userbot_info.get('restriction_reason') or [])}\n"
                     "```\n"
-                    # "@Artemka1806 @redditmarketing"
+                    "@Artemka1806 @redditmarketing"
                 )
                 try:
                     await send_bot_alert_once(
