@@ -7,6 +7,7 @@ from pathlib import Path
 import logging
 import urllib.request
 import urllib.error
+import urllib.parse
 import json
 import difflib
 import redis.asyncio as redis
@@ -55,6 +56,7 @@ except (ValueError, TypeError):
 BACKUP_INTERVAL_MINUTES = int(os.getenv('BACKUP_INTERVAL_MINUTES', '5'))
 BOT_CHECK_INTERVAL_MINUTES = int(os.getenv('BOT_CHECK_INTERVAL_MINUTES', '60'))
 BOT_CHECK_START_DELAY_SECONDS = int(os.getenv('BOT_CHECK_START_DELAY_SECONDS', '10'))
+BOT_USERBOT_RESOLVE_DELAY_SECONDS = float(os.getenv('BOT_USERBOT_RESOLVE_DELAY_SECONDS', '1'))
 POSE_CHECK_INTERVAL_MINUTES = int(os.getenv('POSE_CHECK_INTERVAL_MINUTES', '3'))
 POSE_CHECK_START_DELAY_SECONDS = int(os.getenv('POSE_CHECK_START_DELAY_SECONDS', '10'))
 KEEP_LOCAL_BACKUPS = int(os.getenv('KEEP_LOCAL_BACKUPS', '10'))
@@ -100,7 +102,8 @@ async def send_failure_notification(app: Client, reason: str, details: str = Non
             details_short = (details[:3500] + '...') if len(details) > 3500 else details
             message += f"\n**Деталі:**\n```\n{details_short}\n```"
             
-        await app.send_message(
+        await send_message_with_flood_wait(
+            app,
             chat_id=TELEGRAM_CHAT_ID,
             text=message
         )
@@ -207,6 +210,17 @@ async def send_document_with_flood_wait(app: Client, **kwargs):
             logger.warning(f"FloodWait при відправці файлу, очікування {wait_seconds} сек...")
             await asyncio.sleep(wait_seconds)
 
+
+async def send_message_with_flood_wait(app: Client, **kwargs):
+    """Надійна відправка повідомлення з очікуванням FloodWait."""
+    while True:
+        try:
+            return await app.send_message(**kwargs)
+        except FloodWait as e:
+            wait_seconds = max(int(getattr(e, "value", 0)), 1)
+            logger.warning(f"FloodWait при відправці повідомлення, очікування {wait_seconds} сек...")
+            await asyncio.sleep(wait_seconds)
+
 def cleanup_old_backups():
     """Видаляє старі бекапи, залишаючи лише останні N"""
     try:
@@ -239,7 +253,8 @@ async def send_latest_backup_on_startup(app: Client):
         
         if not backup_files:
             logger.warning("Локальні бекапи не знайдено. Пропускаємо відправку.")
-            await app.send_message(
+            await send_message_with_flood_wait(
+                app,
                 chat_id=TELEGRAM_CHAT_ID,
                 text="🤖 **Бота перезапущено.**\n\n⚠️ Локальні бекапи не знайдено."
             )
@@ -266,7 +281,8 @@ async def send_latest_backup_on_startup(app: Client):
     except Exception as e:
         logger.error(f"Помилка при відправці останнього бекапу: {str(e)}", exc_info=True)
         try:
-            await app.send_message(
+            await send_message_with_flood_wait(
+                app,
                 chat_id=TELEGRAM_CHAT_ID,
                 text=f"🤖 **Бота перезапущено.**\n\n❌ Не вдалося відправити останній бекап.\nПомилка: {str(e)}"
             )
@@ -285,6 +301,74 @@ def fetch_json(url: str, headers: dict, timeout: int = 10):
         status = e.code
         data = e.read()
     return status, json.loads(data) if data else {}
+
+
+def send_json(url: str, headers: dict, payload: dict, method: str = "PATCH", timeout: int = 10):
+    """Синхронний JSON request, повертає (status_code, json_obj)."""
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request_headers = {
+        **headers,
+        "content-type": "application/json",
+    }
+    req = urllib.request.Request(url, data=body, headers=request_headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            status = response.getcode()
+            data = response.read()
+    except urllib.error.HTTPError as e:
+        status = e.code
+        data = e.read()
+    return status, json.loads(data) if data else {}
+
+
+def control_api_v1_base_url() -> str:
+    parsed = urllib.parse.urlsplit(CONTROL_API_URL or CONTROL_API_CONTAINERS_URL)
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if "v1" in path_parts:
+        v1_index = path_parts.index("v1")
+        path = "/" + "/".join(path_parts[:v1_index + 1])
+    else:
+        path = "/v1"
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+async def update_control_api_restriction_status(
+    bot_number,
+    userbot_info: dict,
+):
+    """Синхронізує restriction-state в control API."""
+    if not CONTROL_API_KEY or not userbot_info:
+        return
+
+    url = f"{control_api_v1_base_url()}/bots/restricted"
+    body = {
+        "bot_number": str(bot_number),
+        "telegram_id": userbot_info.get("id"),
+        "restricted": bool(userbot_info.get("restricted")),
+        "restriction_reason": userbot_info.get("restriction_reason") or [],
+        "restriction_checked_at": datetime.now().astimezone().isoformat(),
+    }
+
+    try:
+        status, response_payload = await asyncio.to_thread(
+            send_json,
+            url,
+            {"accept": "application/json", "X-API-Key": CONTROL_API_KEY},
+            body,
+            "PATCH",
+            10,
+        )
+    except Exception as e:
+        logger.error(f"Не вдалося оновити restriction-state в control API для bot{bot_number}: {e}")
+        return
+
+    if status not in (200, 201):
+        logger.error(
+            "Невдалий статус restriction update для bot%s: status=%s, body=%s",
+            bot_number,
+            status,
+            normalize_json(response_payload) if isinstance(response_payload, (dict, list)) else response_payload,
+        )
 
 
 def clean_bot_username(username: str) -> str:
@@ -356,7 +440,7 @@ async def send_bot_alert_once(app: Client, bot_tg_id, message: str, alert_payloa
         logger.info(f"Алерт для bot_id={bot_tg_id} вже був відправлений, пропускаємо.")
         return
 
-    await app.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+    await send_message_with_flood_wait(app, chat_id=TELEGRAM_CHAT_ID, text=message)
     await mark_bot_alerted(bot_tg_id, alert_payload)
 
 
@@ -366,11 +450,21 @@ async def resolve_bot_via_userbot(app: Client, bot_username: str):
     if not username or username == "unknown":
         return None
 
-    try:
-        resolved = await app.invoke(raw.functions.contacts.ResolveUsername(username=username))
-    except Exception as e:
-        logger.error(f"Помилка userbot resolveUsername для @{username}: {e}")
-        return None
+    while True:
+        try:
+            resolved = await app.invoke(raw.functions.contacts.ResolveUsername(username=username))
+            break
+        except FloodWait as e:
+            wait_seconds = max(int(getattr(e, "value", 0)), 1)
+            logger.warning(
+                "Telegram FloodWait на userbot resolveUsername для @%s: очікування %s сек",
+                username,
+                wait_seconds,
+            )
+            await asyncio.sleep(wait_seconds)
+        except Exception as e:
+            logger.error(f"Помилка userbot resolveUsername для @{username}: {e}")
+            return None
 
     users = getattr(resolved, "users", []) or []
     if not users:
@@ -515,6 +609,8 @@ async def check_bots_status(app: Client):
                 bot_username,
                 normalize_json(userbot_info),
             )
+            # Redis дедупить тільки повідомлення в групу; control API має оновлюватися завжди.
+            await update_control_api_restriction_status(bot_number, userbot_info)
 
             if userbot_info.get("restricted"):
                 bot_tg_id = userbot_info.get("id")
@@ -545,6 +641,9 @@ async def check_bots_status(app: Client):
                     )
                 except Exception as e:
                     logger.error(f"Не вдалося відправити повідомлення про restriction: {e}")
+
+            if BOT_USERBOT_RESOLVE_DELAY_SECONDS > 0:
+                await asyncio.sleep(BOT_USERBOT_RESOLVE_DELAY_SECONDS)
 
         token = item.get("bot_token")
         if not token:
@@ -688,7 +787,7 @@ async def check_pose_endpoints(app: Client):
             )
         else:
             message = f"{header}\n\n```\n{diff_text}\n```"
-            await app.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+            await send_message_with_flood_wait(app, chat_id=TELEGRAM_CHAT_ID, text=message)
 
 
 async def main():
@@ -708,7 +807,8 @@ async def main():
         SESSION_NAME,
         api_id=TELEGRAM_API_ID,
         api_hash=TELEGRAM_API_HASH,
-        workdir="./sessions"
+        workdir="./sessions",
+        sleep_threshold=0
     )
 
     scheduler = AsyncIOScheduler()
