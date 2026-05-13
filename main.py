@@ -371,6 +371,53 @@ async def update_control_api_restriction_status(
         )
 
 
+async def update_control_api_bot_api_status(
+    bot_number,
+    status_code,
+    response_payload: dict,
+):
+    """Синхронізує Bot API ban/token-state в control API."""
+    if not CONTROL_API_KEY:
+        return
+
+    ok = response_payload.get("ok") if isinstance(response_payload, dict) else None
+    is_banned = status_code == 401 or ok is False
+    error_text = None
+    if isinstance(response_payload, dict):
+        error_text = response_payload.get("description") or response_payload.get("error")
+
+    url = f"{control_api_v1_base_url()}/bots/bot-api-status"
+    body = {
+        "bot_number": str(bot_number),
+        "bot_api_banned": bool(is_banned),
+        "bot_api_ok": bool(status_code == 200 and ok is True),
+        "bot_api_status": status_code,
+        "bot_api_error": error_text,
+        "bot_api_checked_at": datetime.now().astimezone().isoformat(),
+    }
+
+    try:
+        patch_status, patch_payload = await asyncio.to_thread(
+            send_json,
+            url,
+            {"accept": "application/json", "X-API-Key": CONTROL_API_KEY},
+            body,
+            "PATCH",
+            10,
+        )
+    except Exception as e:
+        logger.error(f"Не вдалося оновити Bot API status в control API для bot{bot_number}: {e}")
+        return
+
+    if patch_status not in (200, 201):
+        logger.error(
+            "Невдалий статус Bot API update для bot%s: status=%s, body=%s",
+            bot_number,
+            patch_status,
+            normalize_json(patch_payload) if isinstance(patch_payload, (dict, list)) else patch_payload,
+        )
+
+
 def clean_bot_username(username: str) -> str:
     """Нормалізує username для resolveUsername."""
     return str(username or "").strip().lstrip("@")
@@ -669,6 +716,7 @@ async def check_bots_status(app: Client):
             status,
             normalize_json(payload) if isinstance(payload, (dict, list)) else payload,
         )
+        await update_control_api_bot_api_status(bot_number, status, payload)
 
         if status == 401 or payload.get("ok") is False:
             bot_tg_id = userbot_info.get("id") if userbot_info else None
