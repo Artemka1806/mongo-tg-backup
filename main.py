@@ -643,54 +643,55 @@ async def check_bots_status(app: Client):
         bot_username = item.get("bot_username", "unknown")
         bot_number = item.get("bot_number", "unknown")
         container_name = f"bot{bot_number}"
-        if container_name not in container_names:
-            continue
+        is_container_running = container_name in container_names
+        if is_container_running:
+            checked_with_container += 1
 
-        checked_with_container += 1
-
-        userbot_info = await resolve_bot_via_userbot(app, bot_username)
-        if userbot_info:
-            checked_userbot_calls += 1
-            logger.info(
-                "Userbot info для %s: %s",
-                bot_username,
-                normalize_json(userbot_info),
-            )
-            # Redis дедупить тільки повідомлення в групу; control API має оновлюватися завжди.
-            await update_control_api_restriction_status(bot_number, userbot_info)
-
-            if userbot_info.get("restricted"):
-                bot_tg_id = userbot_info.get("id")
-                message = (
-                    "⚠️ **У бота є Telegram restriction**\n\n"
-                    f"**bot_username:** @{clean_bot_username(bot_username)}\n"
-                    f"**bot_number:** {bot_number}\n"
-                    f"**telegram_id:** `{bot_tg_id}`\n"
-                    f"**bot:** {userbot_info.get('bot')}\n\n"
-                    f"**restriction_reason:**\n```\n"
-                    f"{format_restriction_reasons(userbot_info.get('restriction_reason') or [])}\n"
-                    "```\n"
-                    "@Artemka1806 @redditmarketing"
+        userbot_info = None
+        if is_container_running:
+            userbot_info = await resolve_bot_via_userbot(app, bot_username)
+            if userbot_info:
+                checked_userbot_calls += 1
+                logger.info(
+                    "Userbot info для %s: %s",
+                    bot_username,
+                    normalize_json(userbot_info),
                 )
-                try:
-                    await send_bot_alert_once(
-                        app,
-                        bot_tg_id,
-                        message,
-                        {
-                            "type": "restriction",
-                            "bot_username": clean_bot_username(bot_username),
-                            "bot_number": bot_number,
-                            "telegram_id": bot_tg_id,
-                            "restriction_reason": userbot_info.get("restriction_reason") or [],
-                            "created_at": datetime.now().isoformat(),
-                        },
-                    )
-                except Exception as e:
-                    logger.error(f"Не вдалося відправити повідомлення про restriction: {e}")
+                # Redis дедупить тільки повідомлення в групу; control API має оновлюватися завжди.
+                await update_control_api_restriction_status(bot_number, userbot_info)
 
-            if BOT_USERBOT_RESOLVE_DELAY_SECONDS > 0:
-                await asyncio.sleep(BOT_USERBOT_RESOLVE_DELAY_SECONDS)
+                if userbot_info.get("restricted"):
+                    bot_tg_id = userbot_info.get("id")
+                    message = (
+                        "⚠️ **У бота є Telegram restriction**\n\n"
+                        f"**bot_username:** @{clean_bot_username(bot_username)}\n"
+                        f"**bot_number:** {bot_number}\n"
+                        f"**telegram_id:** `{bot_tg_id}`\n"
+                        f"**bot:** {userbot_info.get('bot')}\n\n"
+                        f"**restriction_reason:**\n```\n"
+                        f"{format_restriction_reasons(userbot_info.get('restriction_reason') or [])}\n"
+                        "```\n"
+                        "@Artemka1806 @redditmarketing"
+                    )
+                    try:
+                        await send_bot_alert_once(
+                            app,
+                            bot_tg_id,
+                            message,
+                            {
+                                "type": "restriction",
+                                "bot_username": clean_bot_username(bot_username),
+                                "bot_number": bot_number,
+                                "telegram_id": bot_tg_id,
+                                "restriction_reason": userbot_info.get("restriction_reason") or [],
+                                "created_at": datetime.now().isoformat(),
+                            },
+                        )
+                    except Exception as e:
+                        logger.error(f"Не вдалося відправити повідомлення про restriction: {e}")
+
+                if BOT_USERBOT_RESOLVE_DELAY_SECONDS > 0:
+                    await asyncio.sleep(BOT_USERBOT_RESOLVE_DELAY_SECONDS)
 
         token = item.get("bot_token")
         if not token:
@@ -718,7 +719,7 @@ async def check_bots_status(app: Client):
         )
         await update_control_api_bot_api_status(bot_number, status, payload)
 
-        if status == 401 or payload.get("ok") is False:
+        if is_container_running and (status == 401 or payload.get("ok") is False):
             bot_tg_id = userbot_info.get("id") if userbot_info else None
             message = (
                 "🚫 **Бот в бані або токен недійсний**\n\n"
